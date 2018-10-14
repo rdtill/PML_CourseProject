@@ -1,0 +1,141 @@
+---
+title: 'Practical Machine Learning: Course Project'
+author: "Ryan Till"
+date: "October 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Summary
+For this project, we are applying machine learning algorithms to predict how correctly a participant performs a unilateral dumbbell bicep curl. The different classes of correctness are listed below. We use data from accelerometers on the belt, forearm, arm and dumbbell for each participant to predict which class they fell into.
+
+Class | Description
+----- | -----------
+A | Exactly according to the specification
+B | Throwing elbows to the front
+C | Lifting the dumbbell only halfway
+D | Lowering the dumbbell only halfway
+E | Trowing hips out to the front
+
+Before we get started we'll need to load the required packages.
+
+```{r packages, message=FALSE}
+library(caret)
+library(rattle)
+```
+
+##Pre-Processing / Data Cleaning
+
+First we will load the provided data and look at a small subset of the variables included.
+
+```{r load_dat}
+training = read.csv("pml-training.csv")
+testing  = read.csv("pml-testing.csv")
+
+head(training[, c(2,8,35,51, 63)])
+```
+
+After taking a look at the data, we see there are a number of variables that are primarily NAs. This is because they are summary statistics, and as such won't be in every observation. Below we define a function that extracts only the observation variables.
+
+```{r data_func, include = TRUE}
+set_cleaning = function(dat){
+  
+  summ_names = c("amplitude", "avg", "kurtosis", "max", 
+                 "min", "skewness", "stddev", "total")
+  
+  number_na = c()
+  for(i in 1:ncol(dat)) {
+    number_na <- c(number_na, nrow(dat) - sum(complete.cases(dat[,i])))
+  }
+  
+  colm_names = c()
+  for(i in 1:ncol(dat)) {
+    colm_names = c(colm_names, 
+                   substr(x = colnames(dat)[i], start = 1, 
+                          stop = regexec("_", colnames(dat)[i])[[1]][1]-1))
+  }
+  
+  is_summ = is.element(colm_names, summ_names)
+  no_na   = number_na == 0
+  
+  list(dat[, (!is_summ & no_na)], dat[, !(!is_summ & no_na)])
+}
+```
+
+With the function defined, we can apply it to our training and testing data sets that were provided for the project. Note that we also remove the participant information from our training set since we will not be using it for prediction purposes.
+
+```{r cleaning, include=TRUE}
+#splitting training
+train_obs  = set_cleaning(training)[[1]]
+train_summ = set_cleaning(training)[[2]]
+#splitting testing
+test_obs  = set_cleaning(testing)[[1]]
+test_summ = set_cleaning(testing)[[2]]
+#removing the subject data from train_obs
+subject_data = train_obs[, c(1:7)]
+train_obs    = train_obs[, -c(1:7)]
+```
+
+As the provided test set excludes the classe variable that we are attempting to predict (it is only used for the associated Project Quiz) we will also need to split our train_obs dataset into a training and testing set (train_obs_trn and train_obs_tst respectively). This will allow us to cross validate any models that we will build. The size ratio between data sets is ~70% training, ~30% testing.
+
+```{r trn_tst_split, include=TRUE}
+#splitting train_obs into train_obs_trn and train_obs_tst
+set.seed(4283)
+in_trn = replicate(n = nrow(train_obs), 
+                   ifelse(test = sample(1:10, 1) <= 3, 
+                          yes = FALSE, no = TRUE))
+train_obs_trn = train_obs[in_trn, ]
+train_obs_tst = train_obs[!in_trn, ]
+```
+
+
+##Model Fitting
+
+###Classification Tree
+
+Since the variable we are trying to predict can only take five possible values, we will first build a model using a classificaion tree.
+
+```{r desc_tree, include=TRUE, cache=TRUE}
+#descision tree
+mod_tree  = train(classe ~ ., data = train_obs_trn, method = "rpart")
+```
+
+Now that the model is built, let's take a look at the tree that was created.
+
+```{r rattle_plot, include=TRUE}
+fancyRpartPlot(mod_tree$finalModel)
+```
+
+One of the issues we can see here is that this tree does not include Class D as a possible outcome. This tells us that it is not going to be a good fit, but to be sure let's look at its accuracy on our test set.
+
+```{r desc_tree_acc, include=TRUE}
+#descision tree accuracy
+pred_tree = predict(mod_tree, train_obs_tst)
+tree_tst_acc = sum(pred_tree == train_obs_tst$classe) / nrow(train_obs_tst)
+tree_tst_acc
+```
+
+As we can see, the accuracy of our classification tree is `r round(tree_tst_acc, 2)`, which tells us this is a bad fit.
+
+###Bagged Classification Trees
+
+Again, given the nature of the classe variable we will still be using classification trees for our model. This time we will use bagging in an effort to increase our accuracy. This is done using the 'treebag' method in the train function from the caret package.
+
+```{r tbag, include=TRUE, cache=TRUE}
+#bagging (treebag)
+mod_tbag  = train(classe ~ ., data = train_obs_trn, method = "treebag")
+```
+
+Now that our model is built, let's take a look at its accuracy on our test set that we created.
+
+```{r tbag_acc, include=TRUE}
+#descision tree accuracy
+pred_tbag = predict(mod_tbag, train_obs_tst)
+tbag_tst_acc = sum(pred_tbag == train_obs_tst$classe) / nrow(train_obs_tst)
+tbag_tst_acc
+```
+
+Here we see that our second model has an accuracy of `r round(tbag_tst_acc, 2)`, which is significantly higher than our first model and implies a very good model fit. Given that this model performed so well on our test set, this was the model I chose for the prediction quiz.
